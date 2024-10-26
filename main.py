@@ -1,12 +1,13 @@
 from fastapi import FastAPI
-from fastapi.responses import JSONResponse
+import uvicorn
+import os
 
 app = FastAPI()
 
 @app.get("/")
-async def root():
-    return {"message": "PDF Processor API is running"}
+def read_root():
+    return {"Hello": "World"}
 
-@app.get("/health")
-async def health():
-    return {"status": "healthy"}
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port, log_level="info")
