@@ -1,0 +1,4 @@
+OPENROUTER_API_KEY=your-api-key
+SITE_URL=your-site-url
+APP_NAME=your-app-name
+MAX_WORKERS=10
