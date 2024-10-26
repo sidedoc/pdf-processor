@@ -28,6 +28,19 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Configuration
+UPLOAD_DIR = "temp_uploads"
+RESULTS_DIR = "processing_results"
+STARTUP_COMPLETED = False
+
+# Create a startup state tracker
+class AppState:
+    def __init__(self):
+        self.is_ready = False
+        self.startup_error = None
+
+app_state = AppState()
+
 # Initialize FastAPI app
 app = FastAPI(
     title="PDF Processing API",
@@ -238,10 +251,6 @@ class PDFProcessor:
         finally:
             doc.close()
 
-# Configuration
-UPLOAD_DIR = "temp_uploads"
-RESULTS_DIR = "processing_results"
-
 # Initialize PDF Processor with Railway environment variables
 try:
     pdf_processor = PDFProcessor(
@@ -296,24 +305,35 @@ async def log_exceptions(request, call_next):
 # Startup event
 @app.on_event("startup")
 async def startup_event():
+    global app_state
     try:
-        logger.info("Starting application with configuration:")
-        logger.info(f"MAX_WORKERS: {os.environ.get('MAX_WORKERS', '10')}")
-        logger.info(f"SITE_URL: {os.environ.get('SITE_URL', 'Not set')}")
-        logger.info(f"APP_NAME: {os.environ.get('APP_NAME', 'Not set')}")
+        logger.info("Starting application initialization...")
         
+        # Check environment variables first
         required_vars = ['OPENROUTER_API_KEY', 'SITE_URL', 'APP_NAME']
         missing_vars = [var for var in required_vars if not os.environ.get(var)]
         if missing_vars:
             raise ValueError(f"Missing required environment variables: {', '.join(missing_vars)}")
         
+        # Create directories
         for dir_name in [UPLOAD_DIR, RESULTS_DIR]:
             os.makedirs(dir_name, exist_ok=True)
-            logger.info(f"Ensured directory exists: {dir_name}")
-            
+            logger.info(f"Created directory: {dir_name}")
+        
+        # Log configuration
+        logger.info("Application configuration:")
+        logger.info(f"MAX_WORKERS: {os.environ.get('MAX_WORKERS', '10')}")
+        logger.info(f"SITE_URL: {os.environ.get('SITE_URL', 'Not set')}")
+        logger.info(f"APP_NAME: {os.environ.get('APP_NAME', 'Not set')}")
+        
+        # Mark startup as completed
+        app_state.is_ready = True
+        logger.info("Application startup completed successfully")
+        
     except Exception as e:
+        app_state.startup_error = str(e)
         logger.error(f"Startup failed: {str(e)}", exc_info=True)
-        sys.exit(1)
+        # Don't exit, let the health check handle the failure
 
 async def process_pdf_background(task_id: str, file_path: str):
     try:
@@ -367,7 +387,7 @@ async def process_pdf_background(task_id: str, file_path: str):
         tasks[task_id].error = str(e)
     finally:
         try:
-            os.remove(file_path)
+          os.remove(file_path)
             logger.info(f"Cleaned up temporary file for task {task_id}")
         except Exception as e:
             logger.error(f"Failed to clean up file {file_path}: {str(e)}")
@@ -380,8 +400,8 @@ async def upload_pdf(
     try:
         if not file.filename.lower().endswith('.pdf'):
             raise HTTPException(status_code=400, detail="File must be a PDF")
-    
-task_id = str(uuid.uuid4())
+        
+        task_id = str(uuid.uuid4())
         logger.info(f"Creating new task {task_id} for file {file.filename}")
         
         temp_path = os.path.join(UPLOAD_DIR, f"{task_id}.pdf")
@@ -402,6 +422,9 @@ task_id = str(uuid.uuid4())
         logger.info(f"Started background processing for task {task_id}")
         
         return task
+    except Exception as e:
+        logger.error(f"Error in upload_pdf: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/task/{task_id}", response_model=ProcessingTask)
 async def get_task_status(task_id: str):
@@ -464,12 +487,43 @@ async def get_text_content(task_id: str, split_length: int = None):
 async def health_check():
     """Health check endpoint with system status"""
     try:
-        # Check if directories exist
+        # Check if app is ready
+        if not app_state.is_ready:
+            if app_state.startup_error:
+                return JSONResponse(
+                    status_code=500,
+                    content={
+                        "status": "failed",
+                        "error": f"Startup failed: {app_state.startup_error}",
+                        "timestamp": datetime.now().isoformat()
+                    }
+                )
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "status": "starting",
+                    "message": "Application is still initializing",
+                    "timestamp": datetime.now().isoformat()
+                }
+            )
+
+        # Check directories
         dirs_status = {
             "upload_dir": os.path.exists(UPLOAD_DIR),
             "results_dir": os.path.exists(RESULTS_DIR)
         }
         
+        if not all(dirs_status.values()):
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "status": "failed",
+                    "error": "Required directories are missing",
+                    "dirs_status": dirs_status,
+                    "timestamp": datetime.now().isoformat()
+                }
+            )
+
         # Check environment variables
         env_vars_set = {
             "OPENROUTER_API_KEY": bool(os.environ.get("OPENROUTER_API_KEY")),
@@ -478,21 +532,43 @@ async def health_check():
             "MAX_WORKERS": bool(os.environ.get("MAX_WORKERS"))
         }
         
+        if not all([env_vars_set["OPENROUTER_API_KEY"], env_vars_set["SITE_URL"], env_vars_set["APP_NAME"]]):
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "status": "failed",
+                    "error": "Missing required environment variables",
+                    "env_vars_status": env_vars_set,
+                    "timestamp": datetime.now().isoformat()
+                }
+            )
+
+        # All checks passed
         return {
             "status": "healthy",
             "timestamp": datetime.now().isoformat(),
             "dirs_status": dirs_status,
-            "env_vars_set": env_vars_set
+            "env_vars_set": env_vars_set,
+            "app_state": "ready"
         }
+        
     except Exception as e:
         logger.error(f"Health check failed: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "error": str(e),
+                "timestamp": datetime.now().isoformat()
+            }
+        )
 
 if __name__ == "__main__":
-    try:
-        port = int(os.environ.get("PORT", 8000))
-        logger.info(f"Starting server on port {port}")
-        uvicorn.run(app, host="0.0.0.0", port=port)
-    except Exception as e:
-        logger.error(f"Failed to start server: {str(e)}", exc_info=True)
-        sys.exit(1)
+    port = int(os.environ.get("PORT", 8000))
+    logger.info(f"Starting server on port {port}")
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=port,
+        log_level="debug"
+    )
