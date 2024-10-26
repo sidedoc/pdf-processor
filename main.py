@@ -387,7 +387,7 @@ async def process_pdf_background(task_id: str, file_path: str):
         tasks[task_id].error = str(e)
     finally:
         try:
-          os.remove(file_path)
+            os.remove(file_path)
             logger.info(f"Cleaned up temporary file for task {task_id}")
         except Exception as e:
             logger.error(f"Failed to clean up file {file_path}: {str(e)}")
