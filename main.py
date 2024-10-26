@@ -372,7 +372,3 @@ async def get_text_content(task_id: str, split_length: int = None):
 async def health_check():
     """Health check endpoint for Railway"""
     return {"status": "healthy"}
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
