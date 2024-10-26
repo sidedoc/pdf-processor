@@ -7,7 +7,8 @@ import requests
 import json
 import base64
 from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from datetime import datetime
 import asyncio
@@ -45,8 +46,59 @@ app_state = AppState()
 app = FastAPI(
     title="PDF Processing API",
     description="API for processing PDFs with text extraction and visual element analysis",
-    version="1.0.0"
+    version="1.0.0",
+    docs_url="/docs",   # Swagger UI endpoint
+    redoc_url="/redoc"  # ReDoc endpoint
 )
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.get("/", response_class=HTMLResponse)
+async def root():
+    """Root endpoint that displays basic API information"""
+    return HTMLResponse(content="""
+    <html>
+        <head>
+            <title>PDF Processor API</title>
+            <style>
+                body {
+                    font-family: Arial, sans-serif;
+                    max-width: 800px;
+                    margin: 40px auto;
+                    padding: 20px;
+                    line-height: 1.6;
+                }
+                code {
+                    background-color: #f4f4f4;
+                    padding: 2px 5px;
+                    border-radius: 3px;
+                }
+            </style>
+        </head>
+        <body>
+            <h1>PDF Processor API</h1>
+            <p>Welcome to the PDF Processing API. Available endpoints:</p>
+            <ul>
+                <li><code>POST /process-pdf/</code> - Upload a PDF for processing</li>
+                <li><code>GET /task/{task_id}</code> - Check processing status</li>
+                <li><code>GET /result/{task_id}</code> - Get processing results</li>
+                <li><code>GET /task/{task_id}/text-content</code> - Get extracted text content</li>
+            </ul>
+            <p>For full API documentation, visit:</p>
+            <ul>
+                <li><a href="/docs">Swagger UI Documentation</a></li>
+                <li><a href="/redoc">ReDoc Documentation</a></li>
+            </ul>
+        </body>
+    </html>
+    """)
 
 class PDFProcessor:
     def __init__(self, api_key: str, site_url: str, app_name: str, max_workers: int = None):
